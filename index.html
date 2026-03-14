@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Retail Setup Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .status-live      { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+    .status-pending   { background: #fef9c3; color: #854d0e; border: 1px solid #fef08a; }
+    .status-in-progress { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+    .status-hold      { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .status-review    { background: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+    .fade-in { animation: fadeIn 0.2s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .modal-overlay { backdrop-filter: blur(2px); }
+    input:focus, select:focus, textarea:focus { outline: none; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f5f9; } ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50:'#eef2ff', 100:'#e0e7ff', 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-50 min-h-screen">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const STATUSES = [
+  { value: 'pending',     label: 'Pending',     cls: 'status-pending' },
+  { value: 'in-progress', label: 'In Progress', cls: 'status-in-progress' },
+  { value: 'review',      label: 'In Review',   cls: 'status-review' },
+  { value: 'live',        label: 'Live',        cls: 'status-live' },
+  { value: 'hold',        label: 'On Hold',     cls: 'status-hold' },
+];
+
+const RETAILERS = [
+  'Amazon','Target','Walmart','Best Buy','Costco','Kroger',
+  'Home Depot','CVS','Walgreens','Instacart','Shipt','Other'
+];
+
+const CATEGORIES = [
+  'Electronics','Grocery','Beauty','Home & Garden','Apparel',
+  'Sports','Toys','Health','Office','Food & Beverage','Other'
+];
+
+const PRIORITIES = ['Low','Medium','High','Critical'];
+
+const DEFAULT_FORM = {
+  id: null,
+  itemName: '', sku: '', retailer: '', category: '', priority: 'Medium',
+  status: 'pending', assignee: '', dueDate: '', websiteUrl: '',
+  notes: '', lastUpdated: '', createdAt: ''
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+const now = () => new Date().toISOString();
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+const fmtDateShort = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+const isOverdue = (d, status) => d && status !== 'live' && new Date(d) < new Date() && status !== 'hold';
+const statusObj = (v) => STATUSES.find(s => s.value === v) || STATUSES[0];
+const priorityCls = (p) => ({
+  Low:'bg-slate-100 text-slate-600', Medium:'bg-amber-100 text-amber-700',
+  High:'bg-orange-100 text-orange-700', Critical:'bg-red-100 text-red-700'
+}[p] || '');
+
+const SEED_DATA = [
+  { id: uid(), itemName: 'Wireless Earbuds Pro X', sku: 'WEP-001', retailer: 'Amazon', category: 'Electronics', priority: 'High', status: 'live', assignee: 'Sarah K.', dueDate: '2026-03-01', websiteUrl: 'https://amazon.com', notes: 'Live on Amazon homepage banner.', lastUpdated: now(), createdAt: now() },
+  { id: uid(), itemName: 'Organic Green Tea 24pk', sku: 'OGT-024', retailer: 'Target', category: 'Grocery', priority: 'Medium', status: 'pending', assignee: 'Mike R.', dueDate: '2026-03-20', websiteUrl: '', notes: 'Waiting on product content approval.', lastUpdated: now(), createdAt: now() },
+  { id: uid(), itemName: 'Smart Home Hub V2', sku: 'SHH-002', retailer: 'Best Buy', category: 'Electronics', priority: 'Critical', status: 'in-progress', assignee: 'Lisa T.', dueDate: '2026-03-18', websiteUrl: 'https://bestbuy.com', notes: 'Images uploaded, pending copy review.', lastUpdated: now(), createdAt: now() },
+  { id: uid(), itemName: 'Vitamin D3 Gummies', sku: 'VDG-500', retailer: 'Walmart', category: 'Health', priority: 'Low', status: 'review', assignee: 'James L.', dueDate: '2026-03-25', websiteUrl: '', notes: 'Compliance review in progress.', lastUpdated: now(), createdAt: now() },
+  { id: uid(), itemName: 'Yoga Mat Premium', sku: 'YMP-001', retailer: 'Costco', category: 'Sports', priority: 'Medium', status: 'hold', assignee: 'Anna B.', dueDate: '2026-04-01', websiteUrl: '', notes: 'On hold — supplier delay.', lastUpdated: now(), createdAt: now() },
+];
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const load = () => { try { return JSON.parse(localStorage.getItem('retail_items')) || SEED_DATA; } catch { return SEED_DATA; } };
+const save = (items) => localStorage.setItem('retail_items', JSON.stringify(items));
+const loadTeam = () => { try { return JSON.parse(localStorage.getItem('retail_team')) || ['Sarah K.','Mike R.','Lisa T.','James L.','Anna B.']; } catch { return []; } };
+const saveTeam = (t) => localStorage.setItem('retail_team', JSON.stringify(t));
+
+// ─── Status Badge ──────────────────────────────────────────────────────────────
+function StatusBadge({ status, size = 'sm' }) {
+  const s = statusObj(status);
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full font-medium ${s.cls} ${size==='sm'?'px-2.5 py-0.5 text-xs':'px-3 py-1 text-sm'}`}>
+      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70 flex-shrink-0"/>
+      {s.label}
+    </span>
+  );
+}
+
+// ─── Confirm Dialog ───────────────────────────────────────────────────────────
+function ConfirmDialog({ message, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay bg-black/30">
+      <div className="bg-white rounded-2xl shadow-xl p-6 w-80 fade-in">
+        <p className="text-sm text-slate-700 mb-5">{message}</p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600">Cancel</button>
+          <button onClick={onConfirm} className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Item Form Modal ───────────────────────────────────────────────────────────
+function ItemForm({ item, teamMembers, onSave, onClose }) {
+  const [form, setForm] = useState(item ? { ...item } : { ...DEFAULT_FORM });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!form.itemName.trim() || !form.retailer) return;
+    const ts = now();
+    onSave({ ...form, id: form.id || uid(), createdAt: form.createdAt || ts, lastUpdated: ts });
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center modal-overlay bg-black/30 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto fade-in">
+        <div className="flex items-center justify-between p-5 border-b border-slate-100">
+          <h2 className="text-lg font-semibold text-slate-800">{form.id ? 'Edit Item' : 'Add New Item'}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Item Name *</label>
+              <input required value={form.itemName} onChange={e=>set('itemName',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow"
+                placeholder="e.g. Wireless Earbuds Pro X" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">SKU / Item ID</label>
+              <input value={form.sku} onChange={e=>set('sku',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow"
+                placeholder="e.g. WEP-001" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Retailer *</label>
+              <select required value={form.retailer} onChange={e=>set('retailer',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow">
+                <option value="">Select retailer...</option>
+                {RETAILERS.map(r=><option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Category</label>
+              <select value={form.category} onChange={e=>set('category',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow">
+                <option value="">Select category...</option>
+                {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
+              <select value={form.status} onChange={e=>set('status',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow">
+                {STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Priority</label>
+              <select value={form.priority} onChange={e=>set('priority',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow">
+                {PRIORITIES.map(p=><option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Assigned To</label>
+              <select value={form.assignee} onChange={e=>set('assignee',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow">
+                <option value="">Unassigned</option>
+                {teamMembers.map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Due Date</label>
+              <input type="date" value={form.dueDate} onChange={e=>set('dueDate',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Live Website URL</label>
+              <input type="url" value={form.websiteUrl} onChange={e=>set('websiteUrl',e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow"
+                placeholder="https://..." />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Notes</label>
+              <textarea value={form.notes} onChange={e=>set('notes',e.target.value)} rows={3}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow resize-none"
+                placeholder="Any additional notes or context..." />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600">Cancel</button>
+            <button type="submit" className="px-5 py-2 text-sm rounded-lg bg-brand-600 text-white hover:bg-brand-700 font-medium transition-colors">
+              {form.id ? 'Save Changes' : 'Add Item'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Item Detail Modal ─────────────────────────────────────────────────────────
+function ItemDetail({ item, onClose, onEdit, onStatusChange, onDelete }) {
+  const s = statusObj(item.status);
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center modal-overlay bg-black/30 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto fade-in">
+        <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-800 leading-tight">{item.itemName}</h2>
+            {item.sku && <p className="text-xs text-slate-400 mt-0.5">SKU: {item.sku}</p>}
+          </div>
+          <button onClick={onClose} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge status={item.status} size="md" />
+            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${priorityCls(item.priority)}`}>{item.priority} Priority</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              ['Retailer', item.retailer || '—'],
+              ['Category', item.category || '—'],
+              ['Assigned To', item.assignee || 'Unassigned'],
+              ['Due Date', isOverdue(item.dueDate,item.status)
+                ? <span className="text-red-600 font-medium">{fmtDate(item.dueDate)} ⚠ Overdue</span>
+                : fmtDate(item.dueDate)],
+              ['Created', fmtDate(item.createdAt)],
+              ['Last Updated', fmtDate(item.lastUpdated)],
+            ].map(([label, val]) => (
+              <div key={label} className="bg-slate-50 rounded-xl p-3">
+                <p className="text-xs text-slate-400 mb-0.5">{label}</p>
+                <p className="text-sm font-medium text-slate-700">{val}</p>
+              </div>
+            ))}
+          </div>
+
+          {item.websiteUrl && (
+            <div className="flex items-center gap-2 bg-brand-50 rounded-xl p-3 border border-brand-100">
+              <svg className="w-4 h-4 text-brand-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+              <a href={item.websiteUrl} target="_blank" rel="noopener noreferrer"
+                className="text-sm text-brand-600 hover:text-brand-700 font-medium truncate flex-1">{item.websiteUrl}</a>
+              <span className="text-xs bg-brand-100 text-brand-600 px-2 py-0.5 rounded-full font-medium">Live</span>
+            </div>
+          )}
+
+          {item.notes && (
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Notes</p>
+              <p className="text-sm text-slate-700 whitespace-pre-wrap">{item.notes}</p>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-medium text-slate-500 mb-2">Quick Status Update</p>
+            <div className="flex flex-wrap gap-1.5">
+              {STATUSES.map(st => (
+                <button key={st.value} onClick={() => onStatusChange(item.id, st.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${item.status===st.value?st.cls+' ring-2 ring-offset-1 ring-current/30':' border-slate-200 text-slate-500 hover:border-slate-300 bg-white'}`}>
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="p-5 pt-0 flex gap-2 justify-between">
+          <button onClick={() => onDelete(item.id)} className="px-3 py-2 text-xs rounded-lg text-red-500 hover:bg-red-50 border border-red-100">Delete</button>
+          <button onClick={() => onEdit(item)} className="px-4 py-2 text-sm rounded-lg bg-brand-600 text-white hover:bg-brand-700 font-medium">Edit Item</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Stats Card ───────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div className={`rounded-2xl p-4 border ${color}`}>
+      <p className="text-xs font-medium opacity-70 mb-1">{label}</p>
+      <p className="text-2xl font-bold">{value}</p>
+      {sub && <p className="text-xs opacity-60 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [items, setItems] = useState(load);
+  const [team, setTeam] = useState(loadTeam);
+  const [view, setView] = useState('board'); // 'board' | 'list'
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [detailItem, setDetailItem] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filterRetailer, setFilterRetailer] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterAssignee, setFilterAssignee] = useState('');
+  const [sortBy, setSortBy] = useState('lastUpdated');
+  const [showTeam, setShowTeam] = useState(false);
+  const [newMember, setNewMember] = useState('');
+
+  useEffect(() => { save(items); }, [items]);
+  useEffect(() => { saveTeam(team); }, [team]);
+
+  const saveItem = (item) => {
+    setItems(prev => prev.find(i=>i.id===item.id) ? prev.map(i=>i.id===item.id?item:i) : [item,...prev]);
+    setShowForm(false); setEditItem(null);
+  };
+
+  const deleteItem = (id) => {
+    setItems(prev => prev.filter(i=>i.id!==id));
+    setConfirmDelete(null); setDetailItem(null);
+  };
+
+  const changeStatus = (id, status) => {
+    setItems(prev => prev.map(i => i.id===id ? {...i, status, lastUpdated: now()} : i));
+    setDetailItem(prev => prev && prev.id===id ? {...prev, status, lastUpdated: now()} : prev);
+  };
+
+  const filtered = useMemo(() => {
+    let r = [...items];
+    if (search) { const q=search.toLowerCase(); r=r.filter(i=>i.itemName.toLowerCase().includes(q)||i.sku?.toLowerCase().includes(q)||i.retailer?.toLowerCase().includes(q)||i.assignee?.toLowerCase().includes(q)); }
+    if (filterRetailer) r=r.filter(i=>i.retailer===filterRetailer);
+    if (filterStatus) r=r.filter(i=>i.status===filterStatus);
+    if (filterAssignee) r=r.filter(i=>i.assignee===filterAssignee);
+    r.sort((a,b) => {
+      if (sortBy==='itemName') return a.itemName.localeCompare(b.itemName);
+      if (sortBy==='retailer') return (a.retailer||'').localeCompare(b.retailer||'');
+      if (sortBy==='dueDate') return (a.dueDate||'z').localeCompare(b.dueDate||'z');
+      return (b.lastUpdated||'').localeCompare(a.lastUpdated||'');
+    });
+    return r;
+  }, [items, search, filterRetailer, filterStatus, filterAssignee, sortBy]);
+
+  const usedRetailers = [...new Set(items.map(i=>i.retailer).filter(Boolean))];
+  const usedAssignees = [...new Set(items.map(i=>i.assignee).filter(Boolean))];
+  const stats = {
+    total: items.length,
+    live: items.filter(i=>i.status==='live').length,
+    pending: items.filter(i=>i.status==='pending').length,
+    overdue: items.filter(i=>isOverdue(i.dueDate,i.status)).length,
+  };
+
+  const boardGroups = STATUSES.map(s => ({
+    ...s,
+    items: filtered.filter(i=>i.status===s.value)
+  }));
+
+  const handleEdit = (item) => { setEditItem(item); setDetailItem(null); setShowForm(true); };
+  const handleOpenDetail = (item) => { setDetailItem(item); };
+  const handleDeleteRequest = (id) => { setConfirmDelete(id); };
+
+  const exportCSV = () => {
+    const headers = ['Item Name','SKU','Retailer','Category','Status','Priority','Assigned To','Due Date','Website URL','Notes','Last Updated'];
+    const rows = items.map(i=>[i.itemName,i.sku,i.retailer,i.category,statusObj(i.status).label,i.priority,i.assignee,i.dueDate,i.websiteUrl,i.notes?.replace(/\n/g,' '),fmtDate(i.lastUpdated)]);
+    const csv = [headers,...rows].map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download='retail-tracker-export.csv'; a.click();
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-brand-600 flex items-center justify-center flex-shrink-0">
+              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            </div>
+            <div>
+              <h1 className="text-sm font-semibold text-slate-800 leading-none">Retail Setup Tracker</h1>
+              <p className="text-xs text-slate-400 mt-0.5">Item setup status across retailers</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>setShowTeam(true)} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-600 hover:bg-slate-100 border border-slate-200">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              Team
+            </button>
+            <button onClick={exportCSV} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-600 hover:bg-slate-100 border border-slate-200">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              Export
+            </button>
+            <button onClick={()=>{setEditItem(null);setShowForm(true);}} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
+              Add Item
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+        {/* Stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <StatCard label="Total Items" value={stats.total} sub={`${usedRetailers.length} retailers`} color="bg-white border-slate-200 text-slate-800"/>
+          <StatCard label="Live" value={stats.live} sub="Successfully set up" color="bg-green-50 border-green-200 text-green-800"/>
+          <StatCard label="Pending" value={stats.pending} sub="Awaiting setup" color="bg-yellow-50 border-yellow-200 text-yellow-800"/>
+          <StatCard label="Overdue" value={stats.overdue} sub="Past due date" color={stats.overdue>0?"bg-red-50 border-red-200 text-red-800":"bg-white border-slate-200 text-slate-800"}/>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-3 flex flex-wrap gap-2 items-center">
+          <div className="relative flex-1 min-w-[160px]">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0"/></svg>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search items..."
+              className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-800 transition-shadow" />
+          </div>
+          <select value={filterRetailer} onChange={e=>setFilterRetailer(e.target.value)} className="py-2 px-3 text-sm border border-slate-200 rounded-lg bg-white text-slate-700 transition-shadow">
+            <option value="">All Retailers</option>
+            {usedRetailers.map(r=><option key={r} value={r}>{r}</option>)}
+          </select>
+          <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="py-2 px-3 text-sm border border-slate-200 rounded-lg bg-white text-slate-700 transition-shadow">
+            <option value="">All Statuses</option>
+            {STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <select value={filterAssignee} onChange={e=>setFilterAssignee(e.target.value)} className="py-2 px-3 text-sm border border-slate-200 rounded-lg bg-white text-slate-700 transition-shadow">
+            <option value="">All Assignees</option>
+            {usedAssignees.map(a=><option key={a} value={a}>{a}</option>)}
+          </select>
+          <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="py-2 px-3 text-sm border border-slate-200 rounded-lg bg-white text-slate-700 transition-shadow">
+            <option value="lastUpdated">Sort: Recent</option>
+            <option value="dueDate">Sort: Due Date</option>
+            <option value="itemName">Sort: Name</option>
+            <option value="retailer">Sort: Retailer</option>
+          </select>
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+            {[['board','M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2'],
+              ['list','M4 6h16M4 10h16M4 14h16M4 18h16']].map(([v,d])=>(
+              <button key={v} onClick={()=>setView(v)} className={`p-2 transition-colors ${view===v?'bg-brand-600 text-white':'bg-white text-slate-400 hover:text-slate-600'}`}>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d}/></svg>
+              </button>
+            ))}
+          </div>
+          {(search||filterRetailer||filterStatus||filterAssignee) && (
+            <button onClick={()=>{setSearch('');setFilterRetailer('');setFilterStatus('');setFilterAssignee('');}} className="text-xs text-brand-600 hover:text-brand-700 px-2 py-1.5">Clear filters</button>
+          )}
+          <span className="text-xs text-slate-400 ml-auto">{filtered.length} item{filtered.length!==1?'s':''}</span>
+        </div>
+
+        {/* Board View */}
+        {view==='board' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+            {boardGroups.map(group => (
+              <div key={group.value} className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${group.cls}`} style={{background:'currentColor'}}/>
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{group.label}</span>
+                  <span className="ml-auto text-xs bg-slate-200 text-slate-600 rounded-full px-1.5 py-0.5 font-medium">{group.items.length}</span>
+                </div>
+                <div className="flex flex-col gap-2 min-h-[80px]">
+                  {group.items.length===0 && (
+                    <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center">
+                      <p className="text-xs text-slate-300">No items</p>
+                    </div>
+                  )}
+                  {group.items.map(item=>(
+                    <div key={item.id} onClick={()=>handleOpenDetail(item)}
+                      className="bg-white rounded-xl border border-slate-200 p-3 cursor-pointer hover:border-brand-300 hover:shadow-sm transition-all group fade-in">
+                      <p className="text-sm font-medium text-slate-800 leading-snug line-clamp-2 group-hover:text-brand-600">{item.itemName}</p>
+                      {item.sku && <p className="text-xs text-slate-400 mt-0.5">{item.sku}</p>}
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {item.retailer && <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md">{item.retailer}</span>}
+                        <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${priorityCls(item.priority)}`}>{item.priority}</span>
+                      </div>
+                      {item.dueDate && (
+                        <p className={`text-xs mt-2 flex items-center gap-1 ${isOverdue(item.dueDate,item.status)?'text-red-500':'text-slate-400'}`}>
+                          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                          {isOverdue(item.dueDate,item.status)?'Overdue · ':''}{fmtDateShort(item.dueDate)}
+                        </p>
+                      )}
+                      {item.websiteUrl && (
+                        <div className="mt-2 flex items-center gap-1">
+                          <svg className="w-3 h-3 text-brand-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                          <span className="text-xs text-brand-500 truncate">Link live</span>
+                        </div>
+                      )}
+                      {item.assignee && (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <div className="w-5 h-5 rounded-full bg-brand-100 text-brand-700 text-xs flex items-center justify-center font-medium flex-shrink-0">
+                            {item.assignee.charAt(0)}
+                          </div>
+                          <span className="text-xs text-slate-500 truncate">{item.assignee}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* List View */}
+        {view==='list' && (
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100">
+                  {['Item / SKU','Retailer','Status','Priority','Assignee','Due Date','Link','Updated'].map(h=>(
+                    <th key={h} className="text-left text-xs font-semibold text-slate-400 px-4 py-3 first:pl-5 last:pr-5 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length===0 && (
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400 text-sm">No items match your filters.</td></tr>
+                )}
+                {filtered.map(item=>(
+                  <tr key={item.id} onClick={()=>handleOpenDetail(item)} className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer transition-colors">
+                    <td className="pl-5 pr-4 py-3">
+                      <p className="font-medium text-slate-800 hover:text-brand-600">{item.itemName}</p>
+                      {item.sku && <p className="text-xs text-slate-400">{item.sku}</p>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">{item.retailer||'—'}</span>
+                    </td>
+                    <td className="px-4 py-3"><StatusBadge status={item.status}/></td>
+                    <td className="px-4 py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${priorityCls(item.priority)}`}>{item.priority}</span></td>
+                    <td className="px-4 py-3">
+                      {item.assignee
+                        ? <div className="flex items-center gap-1.5">
+                            <div className="w-5 h-5 rounded-full bg-brand-100 text-brand-700 text-xs flex items-center justify-center font-medium">{item.assignee.charAt(0)}</div>
+                            <span className="text-slate-600 text-xs whitespace-nowrap">{item.assignee}</span>
+                          </div>
+                        : <span className="text-slate-400 text-xs">—</span>}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {item.dueDate
+                        ? <span className={`text-xs ${isOverdue(item.dueDate,item.status)?'text-red-500 font-medium':'text-slate-500'}`}>
+                            {isOverdue(item.dueDate,item.status)?'⚠ ':''}{fmtDateShort(item.dueDate)}
+                          </span>
+                        : <span className="text-slate-300 text-xs">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.websiteUrl
+                        ? <a href={item.websiteUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            Open
+                          </a>
+                        : <span className="text-slate-300 text-xs">—</span>}
+                    </td>
+                    <td className="pr-5 pl-4 py-3 text-xs text-slate-400 whitespace-nowrap">{fmtDateShort(item.lastUpdated)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </main>
+
+      {/* Team Modal */}
+      {showTeam && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center modal-overlay bg-black/30 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm fade-in">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <h2 className="text-base font-semibold text-slate-800">Team Members</h2>
+              <button onClick={()=>setShowTeam(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              {team.map(m=>(
+                <div key={m} className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-brand-100 text-brand-700 text-sm flex items-center justify-center font-semibold">{m.charAt(0)}</div>
+                    <span className="text-sm text-slate-700">{m}</span>
+                  </div>
+                  <button onClick={()=>setTeam(prev=>prev.filter(x=>x!==m))} className="text-xs text-red-400 hover:text-red-600 px-2 py-1 rounded-lg hover:bg-red-50">Remove</button>
+                </div>
+              ))}
+              <div className="flex gap-2 pt-2 border-t border-slate-100">
+                <input value={newMember} onChange={e=>setNewMember(e.target.value)}
+                  onKeyDown={e=>{ if(e.key==='Enter'&&newMember.trim()){setTeam(p=>[...p,newMember.trim()]);setNewMember('');} }}
+                  className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 bg-white transition-shadow"
+                  placeholder="Add team member..." />
+                <button onClick={()=>{ if(newMember.trim()){setTeam(p=>[...p,newMember.trim()]);setNewMember('');} }}
+                  className="px-3 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700">Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modals */}
+      {showForm && <ItemForm item={editItem} teamMembers={team} onSave={saveItem} onClose={()=>{setShowForm(false);setEditItem(null);}}/>}
+      {detailItem && <ItemDetail item={detailItem} onClose={()=>setDetailItem(null)} onEdit={handleEdit} onStatusChange={changeStatus} onDelete={handleDeleteRequest}/>}
+      {confirmDelete && <ConfirmDialog message="Permanently delete this item? This cannot be undone." onConfirm={()=>deleteItem(confirmDelete)} onCancel={()=>setConfirmDelete(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

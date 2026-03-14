@@ -1,0 +1,4 @@
+.claude/
+serve.sh
+server.py
+.DS_Store
