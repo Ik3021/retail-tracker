@@ -71,8 +71,23 @@ const getBrand = (item) => {
 const statusObj = (v) => STATUSES.find(s => s.value === v) || STATUSES[0];
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const load = () => { try { const d = localStorage.getItem('retail_items'); return d ? JSON.parse(d) : SEED_DATA; } catch { return SEED_DATA; } };
-const save = (items) => localStorage.setItem('retail_items', JSON.stringify(items));
+const DATA_VERSION = 'v3'; // bump when SEED_DATA schema changes
+const load = () => {
+  try {
+    const v = localStorage.getItem('retail_data_version');
+    const d = localStorage.getItem('retail_items');
+    // If version mismatch (e.g. upc field added) OR first load → use SEED_DATA
+    if (!d || v !== DATA_VERSION) return SEED_DATA;
+    const parsed = JSON.parse(d);
+    // Extra guard: if first item missing upc field, reload from seed
+    if (parsed.length && parsed[0].upc === undefined) return SEED_DATA;
+    return parsed;
+  } catch { return SEED_DATA; }
+};
+const save = (items) => {
+  localStorage.setItem('retail_items', JSON.stringify(items));
+  localStorage.setItem('retail_data_version', DATA_VERSION);
+};
 
 // ─── StatusPill ───────────────────────────────────────────────────────────────
 function StatusPill({ value, onChange }) {
@@ -561,7 +576,10 @@ function SkuPanel({ sku, items, onClose, onEditItem }) {
                                 className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
                                 🔗 View Live Listing
                               </a>
-                            : <span className="text-xs text-slate-400 italic">URL not set yet</span>
+                            : (() => { const su=getRetailerSearchUrl(item); return su
+                                ? <a href={su} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 px-2 py-0.5 rounded-full">🔍 Find on {item.retailer}</a>
+                                : <span className="text-xs text-slate-400 italic">URL not set yet</span>; })()
+
                           }
                           {item.retailPrice
                             ? <span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full">{item.retailPrice}</span>
@@ -847,8 +865,12 @@ function App() {
   const [showUpload, setShowUpload] = useState(false);
   const [viewMode, setViewMode] = useState('dashboard');
   const [selectedSku, setSelectedSku] = useState(null);
-  const [skuSearch, setSkuSearch] = useState('');
+  const [skuSearch, setSkuSearch] = useState('');  // kept for drilldown compat
+  const [filterSku, setFilterSku] = useState('All');
   const [filterBrand, setFilterBrand] = useState('All');
+
+  // All unique SKUs for the picklist
+  const allSkus = useMemo(() => ['All', ...Array.from(new Set(items.map(i=>i.sku).filter(Boolean))).sort()], [items]);
   const [lastImport, setLastImport] = useState(() => localStorage.getItem('retail_last_import') || null);
 
   const skuProgressMap = useMemo(()=>{
@@ -891,7 +913,8 @@ function App() {
     if (filterRetailer !== 'All') res = res.filter(i => i.retailer === filterRetailer);
     if (filterStatus !== 'All') res = res.filter(i => i.status === filterStatus);
     if (filterPriority !== 'All') res = res.filter(i => i.priority === filterPriority);
-    if (skuSearch.trim()) res = res.filter(i => i.sku?.toLowerCase() === skuSearch.trim().toLowerCase());
+    if (filterSku !== 'All') res = res.filter(i => i.sku === filterSku);
+    else if (skuSearch.trim()) res = res.filter(i => i.sku?.toLowerCase() === skuSearch.trim().toLowerCase());
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       res = res.filter(i => i.itemName?.toLowerCase().includes(q) || i.sku?.toLowerCase().includes(q));
@@ -901,7 +924,7 @@ function App() {
       return sortDir === 'asc' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0);
     });
     return res;
-  }, [items, filterBrand, filterRetailer, filterStatus, filterPriority, search, skuSearch, sortKey, sortDir]);
+  }, [items, filterBrand, filterRetailer, filterStatus, filterPriority, filterSku, search, skuSearch, sortKey, sortDir]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
@@ -921,6 +944,7 @@ function App() {
     if (brand) setFilterBrand(brand);
     if (retailer) setFilterRetailer(retailer);
     setFilterStatus('All');
+    setFilterSku('All');
     setSearch('');
     setPage(1);
     setViewMode('table');
@@ -983,15 +1007,16 @@ function App() {
           </button>
         ))}
         {/* Active filter indicators */}
-        {viewMode==='table' && (filterBrand!=='All'||filterRetailer!=='All'||filterStatus!=='All'||filterPriority!=='All'||skuSearch) && (
+        {viewMode==='table' && (filterBrand!=='All'||filterRetailer!=='All'||filterStatus!=='All'||filterPriority!=='All'||filterSku!=='All'||skuSearch) && (
           <div className="ml-auto flex items-center gap-1.5">
             <span className="text-xs text-slate-400">Filters:</span>
+            {filterSku!=='All' && <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-mono">{filterSku} <button onClick={()=>setFilterSku('All')} className="ml-1">&times;</button></span>}
             {filterBrand!=='All' && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{filterBrand} <button onClick={()=>setFilterBrand('All')} className="ml-1 hover:text-blue-900">&times;</button></span>}
             {filterRetailer!=='All' && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{filterRetailer} <button onClick={()=>setFilterRetailer('All')} className="ml-1 hover:text-purple-900">&times;</button></span>}
             {filterStatus!=='All' && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{statusObj(filterStatus).label} <button onClick={()=>setFilterStatus('All')} className="ml-1">&times;</button></span>}
             {filterPriority!=='All' && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{filterPriority} <button onClick={()=>setFilterPriority('All')} className="ml-1">&times;</button></span>}
             {skuSearch && <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">SKU: {skuSearch} <button onClick={()=>setSkuSearch('')} className="ml-1">&times;</button></span>}
-            <button onClick={()=>{setFilterBrand('All');setFilterRetailer('All');setFilterStatus('All');setFilterPriority('All');setSkuSearch('');}} className="text-xs text-red-500 hover:text-red-700 ml-1">Clear all</button>
+            <button onClick={()=>{setFilterBrand('All');setFilterRetailer('All');setFilterStatus('All');setFilterPriority('All');setFilterSku('All');setSkuSearch('');}} className="text-xs text-red-500 hover:text-red-700 ml-1">Clear all</button>
           </div>
         )}
       </div>
@@ -1016,9 +1041,12 @@ function App() {
                       {STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </th>
-                  {/* SKU — sortable */}
-                  <th className="w-28 px-3 py-2 text-left th-sort" onClick={()=>handleSort('sku')}>
-                    SKU <SortArrow k="sku"/>
+                  {/* SKU — dropdown picklist */}
+                  <th className="w-36 px-2 py-2 text-left">
+                    <select value={filterSku} onChange={e=>{setFilterSku(e.target.value);setPage(1);}}
+                      className={`text-xs font-semibold uppercase tracking-wide bg-transparent cursor-pointer border-0 focus:outline-none w-full ${filterSku!=='All'?'text-indigo-600':'text-slate-500'}`}>
+                      {allSkus.map(s=><option key={s} value={s}>{s==='All'?'SKU ▾':s}</option>)}
+                    </select>
                   </th>
                   {/* Product Name — sortable */}
                   <th className="px-3 py-2 text-left th-sort" onClick={()=>handleSort('itemName')}>
@@ -1051,7 +1079,7 @@ function App() {
                     </select>
                   </th>
                   {/* Progress */}
-                  <th className="w-20 px-3 py-2 text-left text-slate-500">Progress</th>
+                  <th className="w-16 px-3 py-2 text-left text-slate-500">Live</th>
                   {/* URL */}
                   <th className="w-16 px-3 py-2 text-center text-slate-500">URL</th>
                   {/* Price */}
@@ -1150,6 +1178,24 @@ function InlineEdit({ value, placeholder, onSave, display, isLive }) {
   return <span className="text-slate-200 text-xs">—</span>;
 }
 
+// ─── Retailer Search URL Generator ────────────────────────────────────────────
+const RETAILER_SEARCH_URLS = {
+  'Walmart':         (sku, name) => `https://www.walmart.com/search?q=${encodeURIComponent(sku)}`,
+  'Home Depot':      (sku, name) => `https://www.homedepot.com/s/${encodeURIComponent(sku)}`,
+  'Best Buy':        (sku, name) => `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(sku)}`,
+  "Lowe's":          (sku, name) => `https://www.lowes.com/search?searchTerm=${encodeURIComponent(sku)}`,
+  'Overstock':       (sku, name) => `https://www.overstock.com/search?keywords=${encodeURIComponent(sku)}`,
+  'AAFES':           (sku, name) => `https://www.shopmyexchange.com/search?query=${encodeURIComponent(sku)}`,
+  'NRHL':            (sku, name) => `https://www.nrhlonline.com/search?q=${encodeURIComponent(sku)}`,
+  'ChannelAdvisor':  (sku, name) => `https://manage.channeladvisor.com/`,
+  'Amazon':          (sku, name) => `https://www.amazon.com/s?k=${encodeURIComponent(sku)}`,
+  'Target':          (sku, name) => `https://www.target.com/s?searchTerm=${encodeURIComponent(sku)}`,
+};
+const getRetailerSearchUrl = (item) => {
+  const fn = RETAILER_SEARCH_URLS[item.retailer];
+  return fn ? fn(item.sku, item.itemName) : null;
+};
+
 // ─── Task Row (separate component for perf) ───────────────────────────────────
 const PRIORITY_STYLE = {
   Critical: 'text-red-700 bg-red-50 border-red-200',
@@ -1205,32 +1251,33 @@ function TaskRow({ item, skuProgressMap, onEdit, onStatusChange, onSkuClick, onF
           : <span className="text-slate-200 text-xs">—</span>
         }
       </td>
-      {/* Progress (SKU-level: live/total retailers) */}
-      <td className="px-3 py-2" onClick={e=>e.stopPropagation()}>
-        <button onClick={e=>{e.stopPropagation();onSkuClick(item.sku);}} title={`${prog.live}/${prog.total} retailers live`}
-          className="flex items-center gap-1.5 group">
-          <span className="text-xs font-mono text-slate-500 w-8 text-right shrink-0">{prog.live}/{prog.total}</span>
-          <div className="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-            <div className={`h-full rounded-full transition-all ${progPct===100?'bg-green-500':progPct>50?'bg-amber-400':'bg-blue-400'}`} style={{width:`${progPct}%`}}></div>
-          </div>
+      {/* Progress (SKU-level: X/Y retailers live) */}
+      <td className="px-3 py-2 text-center" onClick={e=>e.stopPropagation()}>
+        <button onClick={e=>{e.stopPropagation();onSkuClick(item.sku);}} title={`${prog.live}/${prog.total} retailers live — click to view all`}
+          className={`text-xs font-mono font-bold px-1.5 py-0.5 rounded border ${progPct===100?'text-green-700 bg-green-50 border-green-200':progPct>0?'text-amber-700 bg-amber-50 border-amber-200':'text-slate-400 bg-slate-50 border-slate-200'}`}>
+          {prog.live}/{prog.total}
         </button>
       </td>
-      {/* URL — inline editable for live rows */}
+      {/* URL — inline editable; shows search link when empty */}
       <td className="px-3 py-2 text-center" onClick={e=>e.stopPropagation()}>
-        <InlineEdit
-          value={item.websiteUrl}
-          placeholder="https://..."
-          isLive={isLive}
-          onSave={v=>onFieldUpdate(item.id,'websiteUrl',v)}
-          display={
-            <a href={item.websiteUrl} target="_blank" rel="noreferrer"
+        {item.websiteUrl ? (
+          <a href={item.websiteUrl} target="_blank" rel="noreferrer"
+             onClick={e=>e.stopPropagation()}
+             className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-full transition-colors"
+             title={item.websiteUrl}>
+            🔗 Live
+          </a>
+        ) : (() => {
+          const searchUrl = getRetailerSearchUrl(item);
+          return searchUrl ? (
+            <a href={searchUrl} target="_blank" rel="noreferrer"
                onClick={e=>e.stopPropagation()}
-               className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-full transition-colors"
-               title={item.websiteUrl}>
-              🔗 Live
+               className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-blue-600 border border-dashed border-slate-300 hover:border-blue-400 bg-white hover:bg-blue-50 px-2 py-0.5 rounded-full transition-colors"
+               title={`Search ${item.retailer} for ${item.sku}`}>
+              🔍 Find
             </a>
-          }
-        />
+          ) : <span className="text-slate-200 text-xs">—</span>;
+        })()}
       </td>
       {/* Price — inline editable for live rows */}
       <td className="px-3 py-2 text-center" onClick={e=>e.stopPropagation()}>
